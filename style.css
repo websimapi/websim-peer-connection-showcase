@@ -1,163 +1,163 @@
 body {
   font-family: sans-serif;
-  background-color: #f0f0f0;
-  color: #333;
+  background-color: #222; /* Darker background */
+  color: #eee;
   display: flex;
-  justify-content: center;
+  flex-direction: column; /* Stack elements vertically */
   align-items: center;
   min-height: 100vh;
   margin: 0;
+  padding: 1em;
+  box-sizing: border-box;
 }
 
 #container {
-  background-color: #fff;
-  padding: 2em;
+  background-color: #333;
+  padding: 1.5em;
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  max-width: 800px;
-  width: 90%;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  width: 95%;
+  max-width: 900px; /* Adjust based on canvas width */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 h1 {
   text-align: center;
-  color: #1a73e8;
-}
-
-#status {
-  text-align: center;
-  margin-bottom: 1em;
-  font-weight: bold;
-}
-
-#peers-container {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 1em;
-  margin-bottom: 1.5em;
-}
-
-.peer {
-  border: 1px solid #ccc;
-  padding: 1em;
-  border-radius: 4px;
-  text-align: center;
-  background-color: #f9f9f9;
-  position: relative;
-  overflow: hidden; /* To contain the connection lines */
-}
-
-.peer img {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
+  color: #4CAF50; /* Greenish title */
   margin-bottom: 0.5em;
 }
 
-.peer .username {
+#status, #metrics {
+  text-align: center;
+  margin-bottom: 0.8em;
   font-weight: bold;
   font-size: 0.9em;
-  word-break: break-all;
+  color: #ccc;
 }
 
-.peer .presence-data {
-  font-size: 0.8em;
-  margin-top: 0.5em;
-  word-break: break-all;
-  max-height: 50px;
-  overflow-y: auto;
-  background: #eee;
-  padding: 5px;
-  border-radius: 3px;
+#metrics span {
+    margin: 0 10px;
+    display: inline-block;
 }
 
-.peer.self {
-  border-color: #1a73e8;
-  background-color: #e8f0fe;
+#simulation-canvas {
+  border: 1px solid #555;
+  background-color: #111; /* Very dark canvas bg */
+  margin-bottom: 1em;
+  display: block; /* Ensure it takes block layout */
 }
 
 #controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5em;
+  gap: 0.8em;
   margin-bottom: 1em;
+  justify-content: center;
 }
 
+#controls label {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+}
+
+#controls input[type="number"] {
+    width: 70px;
+    padding: 0.3em;
+    background-color: #444;
+    color: #eee;
+    border: 1px solid #666;
+    border-radius: 4px;
+}
+
+
 #controls button {
-  padding: 0.5em 1em;
+  padding: 0.6em 1.2em;
   border: none;
   border-radius: 4px;
-  background-color: #1a73e8;
+  background-color: #4CAF50;
   color: white;
   cursor: pointer;
   font-size: 0.9em;
+  transition: background-color 0.2s ease;
 }
 
 #controls button:hover {
-  background-color: #1558b3;
+  background-color: #45a049;
+}
+#controls button.active {
+    background-color: #f44336; /* Red when active/stop */
+}
+#controls button.active:hover {
+    background-color: #d32f2f;
 }
 
+
+#peers-list-container {
+    width: 100%;
+    margin-bottom: 1em;
+}
+
+#peers-list-container h2 {
+    text-align: center;
+    font-size: 1.1em;
+    margin-bottom: 0.5em;
+    color: #bbb;
+}
+
+#peers-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5em;
+    justify-content: center;
+    max-height: 80px;
+    overflow-y: auto;
+    background: #2a2a2a;
+    padding: 0.5em;
+    border-radius: 4px;
+}
+
+.peer-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: #444;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 0.8em;
+}
+
+.peer-item img {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+}
+
+.peer-item.self {
+    background-color: #4CAF50;
+    color: #111;
+    font-weight: bold;
+}
+
+
 #debug-log {
-  background-color: #eee;
+  background-color: #2a2a2a;
   padding: 1em;
   border-radius: 4px;
   font-size: 0.8em;
-  max-height: 150px;
+  max-height: 100px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-wrap: break-word;
-}
-
-/* SVG Connection Lines */
-#connection-lines {
-  position: absolute;
-  top: 0;
-  left: 0;
   width: 100%;
-  height: 100%;
-  pointer-events: none; /* Allows clicks to pass through */
-  z-index: -1; /* Behind peer elements */
+  box-sizing: border-box; /* Include padding in width */
+  border: 1px solid #444;
+  color: #ccc;
 }
 
-.connection-line {
-  stroke: #aaa;
-  stroke-width: 1;
-  stroke-dasharray: 4 2;
-  transition: stroke 0.3s ease;
+/* Remove old peer grid and connection line styles */
+#peers-container, #connection-lines, .peer, .connection-line {
+  display: none;
 }
-
-.connection-line.active {
-  stroke: #1a73e8;
-  stroke-width: 2;
-  stroke-dasharray: none;
-}
-
-.connection-line.sending {
-  stroke: #ff9800; /* Orange for sending */
-  stroke-width: 2;
-  stroke-dasharray: none;
-}
-
-.connection-line.receiving {
-  stroke: #4caf50; /* Green for receiving */
-  stroke-width: 2;
-  stroke-dasharray: none;
-}
-
-.highlight-send {
-  animation: highlight-send 0.5s ease-out;
-}
-
-.highlight-receive {
-  animation: highlight-receive 0.5s ease-out;
-}
-
-@keyframes highlight-send {
-  0% { background-color: rgba(255, 152, 0, 0.3); } /* Orange */
-  100% { background-color: #e8f0fe; } /* Default self color */
-}
-
-@keyframes highlight-receive {
-  0% { background-color: rgba(76, 175, 80, 0.3); } /* Green */
-  100% { background-color: #f9f9f9; } /* Default peer color */
-}
-

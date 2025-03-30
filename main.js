@@ -1,125 +1,229 @@
 import * as config from './config.js';
 
-const peersContainer = document.getElementById('peers-container');
+// --- DOM Elements ---
 const statusElement = document.getElementById('status');
-const updatePresenceButton = document.getElementById('update-presence-button');
-const updateRoomStateButton = document.getElementById('update-room-state-button');
-const requestUpdateButton = document.getElementById('request-update-button');
-const stressTestButton = document.getElementById('stress-test-button');
+const metricsElement = document.getElementById('metrics');
+const canvas = document.getElementById('simulation-canvas');
+const ctx = canvas.getContext('2d');
+const numAgentsInput = document.getElementById('num-agents-input');
+const startStopButton = document.getElementById('start-stop-sim-button');
+const loadPresenceButton = document.getElementById('load-presence-button');
+// const loadRoomStateButton = document.getElementById('load-room-state-button'); // Optional for room state load
+const peersListElement = document.getElementById('peers-list');
 const debugLogElement = document.getElementById('debug-log');
-const container = document.getElementById('container');
+const container = document.getElementById('container'); // Keep for potential future use, but less critical now
 
+// --- State ---
 const room = new WebsimSocket();
-let stressTestInterval = null;
+let visualAgents = []; // For local visualization only { x, y, vx, vy }
+let simulationRunning = false;
+let loadTestInterval = null;
+let loadTestType = null; // 'presence' or 'roomState'
+let animationFrameId = null;
+let lastTimestamp = 0;
+let fps = 0;
+let presenceUpdatesSent = 0;
+// let roomStateUpdatesSent = 0; // If using room state load
 
+// --- Setup ---
+canvas.width = config.canvasWidth;
+canvas.height = config.canvasHeight;
+numAgentsInput.value = Math.min(100, config.maxVisualAgents); // Default value
+numAgentsInput.max = config.maxVisualAgents;
+
+// --- Logging ---
 function log(message) {
   console.log(message);
   const time = new Date().toLocaleTimeString();
   debugLogElement.textContent = `[${time}] ${message}\n` + debugLogElement.textContent;
-  // Keep log trimmed
   const lines = debugLogElement.textContent.split('\n');
   if (lines.length > 50) {
       debugLogElement.textContent = lines.slice(0, 50).join('\n');
   }
 }
 
-function getElementCenter(element) {
-    const rect = element.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
+// --- Simulation Logic ---
+function createVisualAgent() {
     return {
-        x: rect.left + rect.width / 2 - containerRect.left,
-        y: rect.top + rect.height / 2 - containerRect.top,
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        vx: (Math.random() - 0.5) * 2, // Velocity x
+        vy: (Math.random() - 0.5) * 2, // Velocity y
+        color: '#888', // Default grey for simulated
     };
 }
 
-function updateConnectionLines() {
-    let svg = document.getElementById('connection-lines');
-    if (!svg) {
-        svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.id = 'connection-lines';
-        container.insertBefore(svg, peersContainer); // Insert before peers
-    }
-    svg.innerHTML = ''; // Clear existing lines
+function updateVisualAgents(deltaTime) {
+    const speed = 50; // Pixels per second
+    visualAgents.forEach(agent => {
+        agent.x += agent.vx * speed * deltaTime;
+        agent.y += agent.vy * speed * deltaTime;
 
-    const peerElements = Array.from(peersContainer.children);
-    if (peerElements.length < 2) return;
-
-    const selfElement = peersContainer.querySelector('.self');
-    if (!selfElement) return; // Should not happen if client is connected
-
-    const selfCenter = getElementCenter(selfElement);
-
-    peerElements.forEach(peerElement => {
-        if (peerElement === selfElement) return; // Don't draw line to self
-
-        const peerCenter = getElementCenter(peerElement);
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', selfCenter.x);
-        line.setAttribute('y1', selfCenter.y);
-        line.setAttribute('x2', peerCenter.x);
-        line.setAttribute('y2', peerCenter.y);
-        line.setAttribute('class', 'connection-line');
-        line.setAttribute('data-peer-id', peerElement.dataset.clientId); // Link line to peer
-        svg.appendChild(line);
+        // Bounce off walls
+        if (agent.x < 0 || agent.x > canvas.width) {
+            agent.vx *= -1;
+            agent.x = Math.max(0, Math.min(canvas.width, agent.x)); // Clamp position
+        }
+        if (agent.y < 0 || agent.y > canvas.height) {
+            agent.vy *= -1;
+            agent.y = Math.max(0, Math.min(canvas.height, agent.y)); // Clamp position
+        }
     });
 }
 
+function resizeVisualAgents(count) {
+    count = Math.min(count, config.maxVisualAgents); // Enforce max
+    const currentCount = visualAgents.length;
+    if (count > currentCount) {
+        for (let i = 0; i < count - currentCount; i++) {
+            visualAgents.push(createVisualAgent());
+        }
+    } else if (count < currentCount) {
+        visualAgents.splice(count, currentCount - count);
+    }
+    log(`Set visual agent count to ${visualAgents.length}`);
+}
 
-function updatePeersUI() {
-  peersContainer.innerHTML = ''; // Clear existing peers
+// --- Drawing Logic ---
+function draw(timestamp) {
+    if (!simulationRunning) {
+        // Clear canvas if simulation stopped
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        return;
+    };
+
+    const deltaTime = (timestamp - lastTimestamp) / 1000 || 0; // Seconds
+    lastTimestamp = timestamp;
+    fps = Math.round(1 / deltaTime);
+
+    // Update local simulation
+    updateVisualAgents(deltaTime);
+
+    // Clear canvas
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw visual agents (grey dots)
+    visualAgents.forEach(agent => {
+        ctx.fillStyle = agent.color;
+        ctx.beginPath();
+        ctx.arc(agent.x, agent.y, 3, 0, Math.PI * 2); // Small dots
+        ctx.fill();
+    });
+
+    // Draw real peers (colored dots)
+    Object.entries(room.presence).forEach(([clientId, presence]) => {
+        if (presence && typeof presence.x === 'number' && typeof presence.y === 'number') {
+            const isSelf = clientId === room.clientId;
+            ctx.fillStyle = isSelf ? '#4CAF50' : '#2196F3'; // Green for self, blue for others
+            ctx.beginPath();
+            ctx.arc(
+                (presence.x / 500) * canvas.width, // Scale position to canvas
+                (presence.y / 500) * canvas.height,
+                isSelf ? 6 : 5, // Slightly larger dot for self
+                0, Math.PI * 2
+            );
+            ctx.fill();
+
+            // Draw username label near peer dot
+            const peerInfo = room.peers[clientId];
+            if (peerInfo) {
+                ctx.fillStyle = '#eee';
+                ctx.font = '10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(
+                    peerInfo.username + (isSelf ? ' (You)' : ''),
+                    (presence.x / 500) * canvas.width,
+                    (presence.y / 500) * canvas.height - 10 // Position label above dot
+                );
+            }
+        }
+    });
+
+    updateMetricsDisplay(); // Update metrics display
+
+    animationFrameId = requestAnimationFrame(draw);
+}
+
+// --- UI Update Functions ---
+function updateMetricsDisplay() {
+    const realPeerCount = Object.keys(room.peers).length;
+    metricsElement.innerHTML = `
+        <span>FPS: ${fps}</span> |
+        <span>Visual Agents: ${visualAgents.length}</span> |
+        <span>Real Peers: ${realPeerCount}</span> |
+        <span>Presence Sent: ${presenceUpdatesSent}</span>
+    `; // Add room state updates if implemented
+}
+
+function updatePeersList() {
+  peersListElement.innerHTML = ''; // Clear existing list
 
   Object.entries(room.peers).forEach(([clientId, peerInfo]) => {
     const isSelf = clientId === room.clientId;
-    const presenceData = room.presence[clientId] || {};
 
     const peerElement = document.createElement('div');
-    peerElement.classList.add('peer');
+    peerElement.classList.add('peer-item');
     if (isSelf) {
       peerElement.classList.add('self');
     }
     peerElement.dataset.clientId = clientId;
 
     const avatar = document.createElement('img');
-    avatar.src = peerInfo.avatarUrl || 'https://via.placeholder.com/50'; // Default avatar
+    avatar.src = peerInfo.avatarUrl || 'https://via.placeholder.com/20'; // Default avatar
     avatar.alt = `${peerInfo.username}'s avatar`;
+    avatar.onerror = () => avatar.src = 'https://via.placeholder.com/20'; // Fallback
 
-    const username = document.createElement('div');
-    username.classList.add('username');
+    const username = document.createElement('span');
     username.textContent = peerInfo.username + (isSelf ? ' (You)' : '');
-
-    const presenceDisplay = document.createElement('div');
-    presenceDisplay.classList.add('presence-data');
-    presenceDisplay.textContent = JSON.stringify(presenceData, null, 2);
 
     peerElement.appendChild(avatar);
     peerElement.appendChild(username);
-    peerElement.appendChild(presenceDisplay);
-    peersContainer.appendChild(peerElement);
+    peersListElement.appendChild(peerElement);
   });
-
-  updateConnectionLines(); // Redraw lines after updating peers
-  log(`Peers updated. Count: ${Object.keys(room.peers).length}`);
+  log(`Peers list updated. Count: ${Object.keys(room.peers).length}`);
 }
 
-function highlightConnection(targetClientId, type) {
-    const line = document.querySelector(`#connection-lines .connection-line[data-peer-id="${targetClientId}"]`);
-    if (line) {
-        line.classList.remove('sending', 'receiving', 'active'); // Remove existing states
-        line.classList.add(type); // Add the new state (e.g., 'sending', 'receiving')
-        setTimeout(() => line.classList.remove(type), 500); // Remove highlight after 500ms
+function startSimulation() {
+    if (simulationRunning) return;
+    simulationRunning = true;
+    startStopButton.textContent = 'Stop Simulation';
+    startStopButton.classList.add('active');
+    resizeVisualAgents(parseInt(numAgentsInput.value, 10)); // Ensure agents are created
+    lastTimestamp = performance.now(); // Reset timestamp
+    animationFrameId = requestAnimationFrame(draw);
+    log('Simulation started.');
+}
+
+function stopSimulation() {
+    if (!simulationRunning) return;
+    simulationRunning = false;
+    startStopButton.textContent = 'Start Simulation';
+    startStopButton.classList.remove('active');
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+    }
+     // Optionally clear canvas immediately
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    log('Simulation stopped.');
+}
+
+function stopLoadTest() {
+    if (loadTestInterval) {
+        clearInterval(loadTestInterval);
+        loadTestInterval = null;
+        loadPresenceButton.textContent = 'Load Test (Presence)';
+        loadPresenceButton.classList.remove('active');
+        // Reset room state button too if implemented
+        log(`Load test (${loadTestType}) stopped.`);
+        loadTestType = null;
     }
 }
 
-function highlightPeer(clientId, type) {
-    const peerElement = peersContainer.querySelector(`.peer[data-clientId="${clientId}"]`);
-    if (peerElement) {
-        const animationClass = type === 'send' ? 'highlight-send' : 'highlight-receive';
-        peerElement.classList.add(animationClass);
-        setTimeout(() => peerElement.classList.remove(animationClass), 500);
-    }
-}
-
-
+// --- Websim Integration ---
 async function initializeApp() {
   try {
     statusElement.textContent = 'Initializing connection...';
@@ -127,157 +231,105 @@ async function initializeApp() {
     statusElement.textContent = `Connected as ${room.peers[room.clientId]?.username || 'Unknown'}`;
     log(`Initialized. Client ID: ${room.clientId}`);
 
-    // Initial presence state
+    // Initial presence state (places user on map)
     room.updatePresence({
       ...config.initialPresence,
       lastUpdate: Date.now(),
-      actionCount: 0
     });
+    presenceUpdatesSent++;
 
-    // Initial room state (only if no state exists)
+    // Initial room state (only if needed, e.g., for shared simulation elements)
     if (Object.keys(room.roomState).length === 0) {
         room.updateRoomState({
             ...config.initialRoomState,
             lastUpdate: Date.now(),
-            updateCount: 0
         });
         log("Initialized room state.");
     } else {
         log("Room state already exists.");
+        // Sync simulated entities from existing room state if applicable
     }
 
-    updatePeersUI(); // Initial render
+    updatePeersList(); // Initial render of peer list
+    startSimulation(); // Start visualization automatically
 
     room.subscribePresence((currentPresence) => {
       log('Presence updated.');
-      updatePeersUI();
+      updatePeersList(); // Update list if peers joined/left
+      // Canvas is updated in the animation loop
     });
 
     room.subscribeRoomState((currentRoomState) => {
       log('Room state updated.');
-      // Could update a separate UI element for room state if needed
-      const roomStateDisplay = document.getElementById('room-state-display'); // Example
-      if (roomStateDisplay) {
-        roomStateDisplay.textContent = JSON.stringify(currentRoomState, null, 2);
-      }
+      // Update visualization based on room state if needed
+      // e.g., draw entities from currentRoomState.simulatedEntities
     });
 
     room.subscribePresenceUpdateRequests((updateRequest, fromClientId) => {
       log(`Received presence update request from ${room.peers[fromClientId]?.username || fromClientId}: ${JSON.stringify(updateRequest)}`);
-      highlightConnection(fromClientId, 'receiving');
-      highlightPeer(room.clientId, 'receive'); // Highlight self as receiver
-
-      const currentClientPresence = room.presence[room.clientId] || {};
-      if (updateRequest.type === 'increment_action') {
-        room.updatePresence({
-          ...currentClientPresence,
-          actionCount: (currentClientPresence.actionCount || 0) + 1,
-          lastUpdate: Date.now()
-        });
-        log(`Updated presence based on request from ${fromClientId}. New actionCount: ${currentClientPresence.actionCount + 1}`);
-      }
-      // Add more request types here as needed
+      // Handle requests if needed (e.g., game interactions)
+      // For this demo, maybe just log it.
     });
 
   } catch (error) {
     console.error('Initialization failed:', error);
     statusElement.textContent = 'Connection failed. Please refresh.';
     log(`Error: ${error.message}`);
+    stopSimulation();
+    stopLoadTest();
   }
 }
 
-// --- Button Event Listeners ---
+// --- Event Listeners ---
 
-updatePresenceButton.addEventListener('click', () => {
-  const currentClientPresence = room.presence[room.clientId] || {};
-  const newUpdateCount = (currentClientPresence.updateCount || 0) + 1;
-  room.updatePresence({
-    ...currentClientPresence,
-    updateCount: newUpdateCount,
-    lastUpdate: Date.now(),
-    randomValue: Math.random().toString(16).substring(2, 8) // Add some changing data
-  });
-  log(`Manually updated own presence. Update count: ${newUpdateCount}`);
-  highlightPeer(room.clientId, 'send'); // Highlight self
+startStopButton.addEventListener('click', () => {
+    if (simulationRunning) {
+        stopSimulation();
+    } else {
+        startSimulation();
+    }
 });
 
-updateRoomStateButton.addEventListener('click', () => {
-  const currentRoomState = room.roomState || {};
-  const newUpdateCount = (currentRoomState.updateCount || 0) + 1;
-  room.updateRoomState({
-    ...currentRoomState, // Preserve existing state
-    updateCount: newUpdateCount,
-    lastGlobalUpdate: Date.now(),
-    randomGlobalValue: Math.random().toString(36).substring(7)
-  });
-  log(`Manually updated room state. Update count: ${newUpdateCount}`);
-  // Optionally highlight all peers or a central element
+numAgentsInput.addEventListener('change', () => {
+    if (simulationRunning) {
+        resizeVisualAgents(parseInt(numAgentsInput.value, 10));
+    }
+     // If not running, the count will be applied when starting
 });
 
-requestUpdateButton.addEventListener('click', () => {
-  const peerIds = Object.keys(room.peers).filter(id => id !== room.clientId);
-  if (peerIds.length === 0) {
-    log('No other peers to send request to.');
-    return;
-  }
-  const randomPeerId = peerIds[Math.floor(Math.random() * peerIds.length)];
-  room.requestPresenceUpdate(randomPeerId, {
-    type: 'increment_action',
-    timestamp: Date.now()
-  });
-  log(`Requested presence update (increment_action) from ${room.peers[randomPeerId]?.username || randomPeerId}`);
-  highlightConnection(randomPeerId, 'sending');
-  highlightPeer(room.clientId, 'send'); // Highlight self as sender
+loadPresenceButton.addEventListener('click', () => {
+    if (loadTestInterval && loadTestType === 'presence') {
+        stopLoadTest();
+    } else {
+        stopLoadTest(); // Stop any other running test first
+        loadTestType = 'presence';
+        loadPresenceButton.textContent = 'Stop Load Test';
+        loadPresenceButton.classList.add('active');
+        log(`Starting presence load test (${config.loadTestUpdatesPerSecond} updates/sec)...`);
+        let stressCounter = 0;
+        loadTestInterval = setInterval(() => {
+            const currentClientPresence = room.presence[room.clientId] || {};
+            room.updatePresence({
+                ...currentClientPresence,
+                x: Math.random() * 500, // Simulate rapid movement
+                y: Math.random() * 500,
+                loadCounter: stressCounter++,
+                lastUpdate: Date.now()
+            });
+            presenceUpdatesSent++;
+            if (stressCounter % 100 === 0) log(`Sent ${stressCounter} presence stress updates.`);
+        }, 1000 / config.loadTestUpdatesPerSecond);
+    }
 });
 
-stressTestButton.addEventListener('click', () => {
-  if (stressTestInterval) {
-    clearInterval(stressTestInterval);
-    stressTestInterval = null;
-    stressTestButton.textContent = 'Stress Test (100 updates/sec)';
-    log('Stress test stopped.');
-  } else {
-    stressTestButton.textContent = 'Stop Stress Test';
-    log(`Starting stress test (${config.stressTestUpdatesPerSecond} updates/sec)...`);
-    let stressCounter = 0;
-    stressTestInterval = setInterval(() => {
-        const currentClientPresence = room.presence[room.clientId] || {};
-        room.updatePresence({
-            ...currentClientPresence,
-            stressCounter: stressCounter++,
-            lastUpdate: Date.now()
-        });
-        // Optional: Update room state or send requests too
-        // log(`Stress update ${stressCounter}`); // Avoid logging every update during stress test
-        if (stressCounter % 100 === 0) log(`Sent ${stressCounter} stress updates.`);
-        highlightPeer(room.clientId, 'send'); // Highlight self quickly
-    }, 1000 / config.stressTestUpdatesPerSecond); // Interval based on config
-  }
-});
+// Optional: Add listener for room state load test button if implemented
 
-
-// Resize observer to redraw lines when container size changes
-const resizeObserver = new ResizeObserver(entries => {
-    updateConnectionLines();
-});
-resizeObserver.observe(container);
-
-
-// Initial setup
+// --- Initial Load ---
 initializeApp();
 
-// Optional: Add a display for room state
-const roomStateDiv = document.createElement('div');
-roomStateDiv.id = 'room-state-display';
-roomStateDiv.style.marginTop = '1em';
-roomStateDiv.style.padding = '1em';
-roomStateDiv.style.backgroundColor = '#f0f0f0';
-roomStateDiv.style.border = '1px solid #ddd';
-roomStateDiv.style.borderRadius = '4px';
-roomStateDiv.style.maxHeight = '100px';
-roomStateDiv.style.overflowY = 'auto';
-roomStateDiv.style.whiteSpace = 'pre-wrap';
-roomStateDiv.style.wordWrap = 'break-word';
-roomStateDiv.textContent = 'Room State: (updates automatically)';
-container.insertBefore(roomStateDiv, debugLogElement); // Insert before debug log
-
+// Clean up on page unload
+window.addEventListener('beforeunload', () => {
+    stopSimulation();
+    stopLoadTest();
+    // Consider unsubscribing, though Websim might handle disconnects gracefully
+});
